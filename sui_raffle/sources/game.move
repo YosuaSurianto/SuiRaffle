@@ -17,7 +17,7 @@ module sui_raffle::game {
     const ETimeNotReached: u64 = 2;
     const EAlreadySettled: u64 = 3;
     const ETimeExpired: u64 = 4;
-    const EInvalidWinnerCount: u64 = 5; // <--- Error baru: Pemenang kebanyakan
+    const EInvalidWinnerCount: u64 = 5; 
 
     // --- STRUCT (Gudang Data) ---
     public struct RafflePool has key, store {
@@ -25,7 +25,7 @@ module sui_raffle::game {
         creator: address,
         ticket_price: u64,
         max_tickets: u64,
-        num_winners: u64,       // <--- KOLOM BARU: Nyimpen target jumlah pemenang
+        num_winners: u64,       
         tickets_sold: u64,
         balance: Balance<SUI>,
         participants: vector<address>,
@@ -53,7 +53,7 @@ module sui_raffle::game {
     public fun create_pool(
         ticket_price: u64, 
         max_tickets: u64, 
-        num_winners: u64, // <--- User wajib isi ini nanti
+        num_winners: u64, 
         duration_hours: u64, 
         clock: &Clock, 
         ctx: &mut TxContext
@@ -92,7 +92,7 @@ module sui_raffle::game {
         transfer::share_object(pool);
     }
 
-    // --- FUNGSI 2: BELI TIKET (Gak banyak berubah) ---
+    // --- FUNGSI 2: BELI TIKET ---
     entry fun buy_ticket(
         pool: &mut RafflePool, 
         payment: Coin<SUI>, 
@@ -116,7 +116,7 @@ module sui_raffle::game {
         }
     }
 
-    // --- FUNGSI 3: UNDIAN (LOGIKA BARU DI SINI) ---
+    // --- FUNGSI 3: UNDIAN ---
     fun settle_pool(pool: &mut RafflePool, r: &Random, ctx: &mut TxContext) {
         pool.is_settled = true;
 
