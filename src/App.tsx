@@ -28,8 +28,6 @@ import { usePools } from "./hooks/usePools";
 import { isUserRejectedError, shortAddress, suiToMist } from "./utils/sui";
 
 function explorerBaseFor(network?: string) {
-  // Suiscan supports network prefixes like /testnet, /devnet, /mainnet.
-  // For unknown networks, fall back to root.
   if (!network) return "https://suiscan.xyz";
   if (network === "mainnet") return "https://suiscan.xyz/mainnet";
   if (network === "testnet") return "https://suiscan.xyz/testnet";
@@ -37,13 +35,18 @@ function explorerBaseFor(network?: string) {
   return "https://suiscan.xyz";
 }
 
+// Sui system objects (stable)
+const CLOCK_ID = "0x6";
+const RANDOM_ID = "0x8";
+
 export default function App() {
   const account = useCurrentAccount();
   const { network } = useSuiClientContext();
   const explorerBase = explorerBaseFor(network);
 
   // Env-driven config (works well on Vercel).
-  const packageId = (import.meta as any).env?.VITE_PACKAGE_ID ?? DEFAULT_PACKAGE_ID;
+  const packageId =
+    (import.meta as any).env?.VITE_PACKAGE_ID ?? DEFAULT_PACKAGE_ID;
   const moduleName = (import.meta as any).env?.VITE_MODULE ?? DEFAULT_MODULE;
 
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
@@ -53,17 +56,24 @@ export default function App() {
   const filteredPools = useMemo(() => {
     const s = search.trim().toLowerCase();
     if (!s) return poolsQuery.data ?? [];
-    return (poolsQuery.data ?? []).filter((p) => p.id.toLowerCase().includes(s) || (p.owner ?? "").toLowerCase().includes(s));
+    return (poolsQuery.data ?? []).filter(
+      (p) =>
+        p.id.toLowerCase().includes(s) ||
+        (p.owner ?? "").toLowerCase().includes(s),
+    );
   }, [poolsQuery.data, search]);
 
   // --- Create raffle form ---
   const [ticketPriceSui, setTicketPriceSui] = useState("0.1");
   const [maxTickets, setMaxTickets] = useState("100");
+  const [numWinners, setNumWinners] = useState("1"); // NEW
   const [endAt, setEndAt] = useState(() => {
     // Default: 1 hour from now.
     const d = new Date(Date.now() + 60 * 60 * 1000);
     const pad = (n: number) => `${n}`.padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+      d.getHours(),
+    )}:${pad(d.getMinutes())}`;
   });
 
   async function createPool() {
@@ -74,39 +84,50 @@ export default function App() {
 
     const priceMist = suiToMist(ticketPriceSui);
     const max = BigInt(maxTickets || "0");
+    const winners = BigInt(numWinners || "0");
     const endMs = BigInt(new Date(endAt).getTime());
 
-    if (priceMist <= 0n) {
-      toast.error("Ticket price harus > 0");
-      return;
-    }
-    if (max <= 0n) {
-      toast.error("Max tickets harus > 0");
-      return;
-    }
-    if (endMs <= BigInt(Date.now())) {
-      toast.error("End time harus di masa depan");
-      return;
-    }
+    if (priceMist <= 0n) return toast.error("Ticket price harus > 0");
+    if (max <= 0n) return toast.error("Max tickets harus > 0");
+    if (winners <= 0n) return toast.error("Num winners harus > 0");
+    if (winners > max)
+      return toast.error("Num winners tidak boleh lebih dari max tickets");
+    if (endMs <= BigInt(Date.now()))
+      return toast.error("End time harus di masa depan");
+
+    // Convert endAt -> duration_hours (dibulatkan ke atas, minimal 1 jam)
+    const diffMs = Number(endMs - BigInt(Date.now()));
+    const durationHours = BigInt(
+      Math.max(1, Math.ceil(diffMs / (60 * 60 * 1000))),
+    );
 
     const tx = new Transaction();
     tx.moveCall({
       target: `${packageId}::${moduleName}::create_pool`,
-      arguments: [tx.pure.u64(priceMist), tx.pure.u64(max), tx.pure.u64(endMs)],
+      arguments: [
+        tx.pure.u64(priceMist), // ticket_price (u64)
+        tx.pure.u64(max), // max_tickets (u64)
+        tx.pure.u64(winners), // num_winners (u64)
+        tx.pure.u64(durationHours), // duration_hours (u64)
+        tx.object(CLOCK_ID), // &Clock
+      ],
     });
 
-    const promise = signAndExecute({
-      transaction: tx,
-    });
+    const promise = signAndExecute({ transaction: tx });
 
     toast.promise(promise, {
       loading: "Buka wallet → approve transaksi create raffle…",
       success: (res) => {
         poolsQuery.refetch();
         const digest = (res as any)?.digest;
-        return digest ? `Raffle created! Tx: ${digest.slice(0, 8)}…` : "Raffle created!";
+        return digest
+          ? `Raffle created! Tx: ${digest.slice(0, 8)}…`
+          : "Raffle created!";
       },
-      error: (e) => (isUserRejectedError(e) ? "Transaksi dibatalkan (reject)." : (e as any)?.message ?? "Gagal create raffle"),
+      error: (e) =>
+        isUserRejectedError(e)
+          ? "Transaksi dibatalkan (reject)."
+          : ((e as any)?.message ?? "Gagal create raffle"),
       action: {
         label: "View",
         onClick: async () => {
@@ -114,18 +135,14 @@ export default function App() {
             const res = await promise;
             const digest = (res as any)?.digest;
             if (digest) window.open(`${explorerBase}/tx/${digest}`, "_blank");
-          } catch {
-            // ignore
-          }
+          } catch {}
         },
       },
     });
 
     try {
       await promise;
-    } catch {
-      // error already surfaced in toast
-    }
+    } catch {}
   }
 
   async function joinPool(poolId: string, ticketPriceMist: bigint) {
@@ -133,9 +150,6 @@ export default function App() {
       toast.error("Connect wallet dulu ya 🙂");
       return;
     }
-
-    const CLOCK_ID = "0x6";
-    const RANDOM_ID = "0x8";
 
     const tx = new Transaction();
     const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(ticketPriceMist)]);
@@ -182,7 +196,6 @@ export default function App() {
     } catch {}
   }
 
-
   return (
     <Container className="app-container" size="4" style={{ paddingBottom: 64 }}>
       <Toaster richColors closeButton />
@@ -195,7 +208,11 @@ export default function App() {
             Raffle on Sui.
           </Heading>
           <Text size="3" color="gray">
-            Player tinggal klik <Text as="span" weight="bold">Join & Pay</Text> — nggak perlu copas ObjectID dari explorer.
+            Player tinggal klik{" "}
+            <Text as="span" weight="bold">
+              Join & Pay
+            </Text>{" "}
+            — nggak perlu copas ObjectID dari explorer.
           </Text>
           <Flex gap="2" wrap="wrap" align="center" style={{ marginTop: 8 }}>
             <Badge variant="soft" color="gray">
@@ -214,15 +231,20 @@ export default function App() {
           </Tabs.List>
 
           <Tabs.Content value="explore" style={{ paddingTop: 18 }}>
-            <Card size="3" style={{
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}>
+            <Card
+              size="3"
+              style={{
+                background:
+                  "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
               <Flex align="center" justify="between" gap="3" wrap="wrap">
                 <Flex direction="column" gap="1">
                   <Heading size="5">All raffles</Heading>
-                  <Text size="2" color="gray">Auto dari on-chain events → data pool paling baru.</Text>
+                  <Text size="2" color="gray">
+                    Auto dari on-chain events → data pool paling baru.
+                  </Text>
                 </Flex>
 
                 <Flex gap="2" align="center" wrap="wrap">
@@ -243,7 +265,8 @@ export default function App() {
                     onClick={() => poolsQuery.refetch()}
                     disabled={poolsQuery.isFetching}
                   >
-                    {poolsQuery.isFetching ? <Spinner /> : <ReloadIcon />} Refresh
+                    {poolsQuery.isFetching ? <Spinner /> : <ReloadIcon />}{" "}
+                    Refresh
                   </Button>
                 </Flex>
               </Flex>
@@ -256,10 +279,14 @@ export default function App() {
                 </Flex>
               ) : poolsQuery.isError ? (
                 <Text color="red">
-                  Gagal load pools: {(poolsQuery.error as any)?.message ?? "Unknown error"}
+                  Gagal load pools:{" "}
+                  {(poolsQuery.error as any)?.message ?? "Unknown error"}
                 </Text>
               ) : filteredPools.length === 0 ? (
-                <Text color="gray">Belum ada raffle (atau belum ada event PoolCreated yang ke-detect).</Text>
+                <Text color="gray">
+                  Belum ada raffle (atau belum ada event PoolCreated yang
+                  ke-detect).
+                </Text>
               ) : (
                 <div className="card-grid" style={{ marginTop: 12 }}>
                   {filteredPools.map((pool) => (
@@ -276,22 +303,35 @@ export default function App() {
           </Tabs.Content>
 
           <Tabs.Content value="create" style={{ paddingTop: 18 }}>
-            <Card size="3" style={{
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}>
+            <Card
+              size="3"
+              style={{
+                background:
+                  "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
               <Flex direction="column" gap="4">
                 <Flex direction="column" gap="1">
                   <Heading size="5">Create raffle</Heading>
                   <Text size="2" color="gray">
-                    Input harga tiket dalam SUI (bukan MIST). Semua data akan ke-chain.
+                    End time akan dikonversi jadi{" "}
+                    <Text as="span" weight="bold">
+                      duration (jam)
+                    </Text>{" "}
+                    (dibulatkan ke atas).
                   </Text>
                 </Flex>
 
                 <Flex gap="3" wrap="wrap">
-                  <Flex direction="column" gap="2" style={{ minWidth: 240, flex: 1 }}>
-                    <Text size="2" color="gray">Ticket price (SUI)</Text>
+                  <Flex
+                    direction="column"
+                    gap="2"
+                    style={{ minWidth: 220, flex: 1 }}
+                  >
+                    <Text size="2" color="gray">
+                      Ticket price (SUI)
+                    </Text>
                     <TextField.Root
                       value={ticketPriceSui}
                       onChange={(e) => setTicketPriceSui(e.target.value)}
@@ -299,8 +339,14 @@ export default function App() {
                     />
                   </Flex>
 
-                  <Flex direction="column" gap="2" style={{ minWidth: 240, flex: 1 }}>
-                    <Text size="2" color="gray">Max tickets</Text>
+                  <Flex
+                    direction="column"
+                    gap="2"
+                    style={{ minWidth: 220, flex: 1 }}
+                  >
+                    <Text size="2" color="gray">
+                      Max tickets
+                    </Text>
                     <TextField.Root
                       value={maxTickets}
                       onChange={(e) => setMaxTickets(e.target.value)}
@@ -308,8 +354,29 @@ export default function App() {
                     />
                   </Flex>
 
-                  <Flex direction="column" gap="2" style={{ minWidth: 260, flex: 1 }}>
-                    <Text size="2" color="gray">End time</Text>
+                  <Flex
+                    direction="column"
+                    gap="2"
+                    style={{ minWidth: 220, flex: 1 }}
+                  >
+                    <Text size="2" color="gray">
+                      Num winners
+                    </Text>
+                    <TextField.Root
+                      value={numWinners}
+                      onChange={(e) => setNumWinners(e.target.value)}
+                      placeholder="1"
+                    />
+                  </Flex>
+
+                  <Flex
+                    direction="column"
+                    gap="2"
+                    style={{ minWidth: 260, flex: 1 }}
+                  >
+                    <Text size="2" color="gray">
+                      End time
+                    </Text>
                     <TextField.Root
                       type="datetime-local"
                       value={endAt}
@@ -320,7 +387,8 @@ export default function App() {
 
                 <Flex align="center" justify="between" wrap="wrap" gap="3">
                   <Text size="2" color="gray">
-                    Creator: {account?.address ? shortAddress(account.address) : "-"}
+                    Creator:{" "}
+                    {account?.address ? shortAddress(account.address) : "-"}
                   </Text>
 
                   <Button onClick={createPool}>Create raffle</Button>
