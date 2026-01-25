@@ -1,233 +1,765 @@
-import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
-import { Transaction } from '@mysten/sui/transactions';
-import { useState } from 'react';
+import {
+  ConnectButton,
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+import { Transaction } from "@mysten/sui/transactions";
+import { useState, useEffect } from "react";
 
-const PACKAGE_ID = '0x1a5d0c5d5b4c9f75f032071ee7f29216b665b3bb9200eb254c5777982b2b6d8a'; 
-const TEST_POOL_ID = '0x8eec84467d3c77e8e795fc1d20a1876f3501564b693121cd932e836cacdf47f6';
-
-
-const MODULE = 'game';
-const CLOCK_ID = '0x6';
-const RANDOM_ID = '0x8';
-const THEME_COLOR = '#00e5ff'; 
+// --- KONFIGURASI SMART CONTRACT ---
+// PENTING: Ganti PACKAGE_ID ini setiap kali Anda melakukan 'sui client publish' ulang!
+const PACKAGE_ID =
+  "0x1a5d0c5d5b4c9f75f032071ee7f29216b665b3bb9200eb254c5777982b2b6d8a";
+const MODULE = "game";
+const CLOCK_ID = "0x6";
+const RANDOM_ID = "0x8";
+const THEME_COLOR = "#00e5ff"; // Warna Cyan Neon
 
 function App() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute } = useSignAndExecuteTransaction();
+
+  // STATE: Kontrol masuk dashboard
+  const [hasEntered, setHasEntered] = useState(false);
+
   const [loading, setLoading] = useState(false);
-  const [targetPool, setTargetPool] = useState(TEST_POOL_ID);
-  
-  // State untuk Link Hasil Transaksi
+  const [targetPool, setTargetPool] = useState(""); // Kosongkan default agar user pakai hasil create
   const [successLink, setSuccessLink] = useState("");
 
-  // State Input Dashboard
+  // State Input
   const [priceInput, setPriceInput] = useState("1");
   const [slotInput, setSlotInput] = useState("5");
-  const [winnerInput, setWinnerInput] = useState("2"); 
+  const [winnerInput, setWinnerInput] = useState("2");
   const [durationInput, setDurationInput] = useState("24");
 
-  // --- FUNGSI CREATE POOL ---
+  // Reset tombol enter jika wallet disconnect
+  useEffect(() => {
+    if (!account) setHasEntered(false);
+  }, [account]);
+
+  // --- LOGIC: CREATE POOL (DENGAN AUTO-CONNECT ID) ---
   const createPool = () => {
     if (!account) return;
     setLoading(true);
-    setSuccessLink(""); // Reset link lama
-    
+    setSuccessLink("");
+
     const tx = new Transaction();
     const priceInMist = parseFloat(priceInput) * 1_000_000_000;
-    
+
     tx.moveCall({
       target: `${PACKAGE_ID}::${MODULE}::create_pool`,
       arguments: [
-        tx.pure.u64(priceInMist), 
-        tx.pure.u64(Number(slotInput)), 
+        tx.pure.u64(priceInMist),
+        tx.pure.u64(Number(slotInput)),
         tx.pure.u64(Number(winnerInput)),
-        tx.pure.u64(Number(durationInput)), 
-        tx.object(CLOCK_ID)
+        tx.pure.u64(Number(durationInput)),
+        tx.object(CLOCK_ID),
       ],
     });
 
-    signAndExecute({ transaction: tx }, {
-      onSuccess: (result) => {
-        const digest = result.digest;
-        const link = `https://suiscan.xyz/testnet/tx/${digest}`;
-        
-        // Simpan link ke State biar muncul di layar
-        setSuccessLink(link);
-        
-        alert('✅ POOL BERHASIL! Silakan klik tombol "LIHAT TIKET" yang baru muncul.');
-        setLoading(false); 
+    signAndExecute(
+      {
+        transaction: tx,
+        // Request data perubahan object untuk mengambil ID Pool baru
+        options: { showObjectChanges: true },
       },
-      onError: (e) => { 
-        alert('❌ ERROR: ' + e.message); 
-        setLoading(false); 
-      }
-    });
+      {
+        onSuccess: (result) => {
+          const digest = result.digest;
+          setSuccessLink(`https://suiscan.xyz/testnet/tx/${digest}`);
+
+          // --- LOGIKA AUTO DETECT ID POOL ---
+          if (result.objectChanges) {
+            // Cari object yang baru dibuat (created) dan tipenya adalah Pool
+            const createdPool = result.objectChanges.find(
+              (change) =>
+                change.type === "created" &&
+                change.objectType.includes(`${MODULE}::Pool`),
+            );
+
+            // Jika ketemu, pasang ID-nya ke state targetPool
+            if (createdPool && "objectId" in createdPool) {
+              setTargetPool(createdPool.objectId);
+              alert(
+                `✅ Pool Berhasil! ID ${createdPool.objectId.slice(0, 6)}... otomatis terpasang di menu Join.`,
+              );
+            }
+          }
+
+          setLoading(false);
+        },
+        onError: (e) => {
+          alert("❌ Error: " + e.message);
+          setLoading(false);
+        },
+      },
+    );
   };
 
-  // --- FUNGSI JOIN POOL ---
+  // --- LOGIC: JOIN POOL ---
   const joinPool = () => {
     if (!account) return;
+    if (!targetPool) {
+      alert("⚠️ Masukkan Pool ID terlebih dahulu (atau buat Pool baru)");
+      return;
+    }
+
     setLoading(true);
     const tx = new Transaction();
-    const TICKET_PRICE = 1_000_000_000; 
-    const [coin] = tx.splitCoins(tx.gas, [TICKET_PRICE]);
+    // Harga tiket disesuaikan dengan input (disini hardcode 1 SUI sesuai tombol)
+    // Sebaiknya dinamis, tapi untuk tes kita samakan dengan input create
+    const TICKET_PRICE = parseFloat(priceInput) * 1_000_000_000;
+
+    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(TICKET_PRICE)]);
 
     tx.moveCall({
       target: `${PACKAGE_ID}::${MODULE}::buy_ticket`,
-      arguments: [tx.object(targetPool), coin, tx.object(RANDOM_ID), tx.object(CLOCK_ID)],
+      arguments: [
+        tx.object(targetPool),
+        coin,
+        tx.object(RANDOM_ID),
+        tx.object(CLOCK_ID),
+      ],
     });
 
-    signAndExecute({ transaction: tx }, {
-      onSuccess: () => { alert('🎟️ TIKET DIBELI! Menunggu slot penuh...'); setLoading(false); },
-      onError: (e) => { alert('❌ ERROR: ' + e.message); setLoading(false); }
-    });
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: () => {
+          alert("🎟️ Tiket Berhasil Dibeli!");
+          setLoading(false);
+        },
+        onError: (e) => {
+          alert("❌ Error: " + e.message);
+          setLoading(false);
+        },
+      },
+    );
   };
 
-  // Styles
-  const inputStyle = {
-    width: '100%', padding: '12px', background: 'rgba(0, 229, 255, 0.05)', 
-    border: `1px solid ${THEME_COLOR}44`, color: 'white', borderRadius: '5px', outline: 'none',
-    marginBottom: '10px'
-  };
-  const labelStyle = { display: 'block', marginBottom: '5px', color: '#aaa', fontSize: '0.8rem', textTransform: 'uppercase' as const, letterSpacing: '1px' };
-
-  // 1. LANDING PAGE
-  if (!account) {
+  // =================================================================
+  // 1. LANDING PAGE VIEW
+  // =================================================================
+  if (!account || !hasEntered) {
     return (
-      <div style={{
-        background: 'radial-gradient(circle at 50% 50%, #050510 0%, #000 100%)',
-        minHeight: '100vh', color: 'white', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontFamily: 'Courier New, monospace'
-      }}>
-        <div style={{
-          border: `2px solid ${THEME_COLOR}`, padding: '40px', borderRadius: '20px', 
-          boxShadow: `0 0 50px ${THEME_COLOR}33`, backdropFilter: 'blur(10px)', background: 'rgba(0,0,0,0.5)'
-        }}>
-          <h1 style={{fontSize: '3.5rem', margin: '0 0 10px 0', textShadow: `0 0 20px ${THEME_COLOR}`, color: 'white'}}>
-            SUI RAFFLE <span style={{color: THEME_COLOR}}>PROTOCOL</span>
-          </h1>
-          <p style={{fontSize: '1.2rem', color: '#8892b0', marginBottom: '40px', letterSpacing: '2px'}}>
-            FAIR LAUNCH • MULTI-WINNER • TRUSTLESS
-          </p>
-          <div style={{transform: 'scale(1.2)'}}>
-             <ConnectButton />
+      <div
+        style={{
+          background: "#050508",
+          minHeight: "100vh",
+          color: "white",
+          fontFamily: '"Inter", sans-serif',
+          overflow: "hidden",
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 5%",
+        }}
+      >
+        {/* Background Glows */}
+        <div
+          style={{
+            position: "absolute",
+            top: "-20%",
+            left: "-10%",
+            width: "600px",
+            height: "600px",
+            background: THEME_COLOR,
+            filter: "blur(200px)",
+            opacity: 0.15,
+            borderRadius: "50%",
+          }}
+        ></div>
+        <div
+          style={{
+            position: "absolute",
+            bottom: "-10%",
+            right: "-5%",
+            width: "500px",
+            height: "500px",
+            background: "#0066ff",
+            filter: "blur(150px)",
+            opacity: 0.1,
+            borderRadius: "50%",
+          }}
+        ></div>
+
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "1200px",
+            margin: "0 auto",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "50px",
+            alignItems: "center",
+            zIndex: 2,
+          }}
+        >
+          {/* KIRI: Hero Text */}
+          <div>
+            <div
+              style={{
+                display: "inline-block",
+                padding: "8px 16px",
+                borderRadius: "30px",
+                background: "rgba(0, 229, 255, 0.1)",
+                border: `1px solid ${THEME_COLOR}44`,
+                color: THEME_COLOR,
+                fontWeight: "600",
+                fontSize: "0.85rem",
+                marginBottom: "30px",
+              }}
+            >
+              Beta v1.0 • Sui Testnet
+            </div>
+
+            <h1
+              style={{
+                fontSize: "4.5rem",
+                fontWeight: "800",
+                lineHeight: "1.1",
+                margin: "0 0 25px 0",
+                letterSpacing: "-2px",
+              }}
+            >
+              Create Crypto <br />
+              <span
+                style={{
+                  background: `linear-gradient(90deg, ${THEME_COLOR} 0%, #0066ff 100%)`,
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                }}
+              >
+                Automated Raffles
+              </span>
+            </h1>
+
+            <p
+              style={{
+                fontSize: "1.2rem",
+                color: "#94a3b8",
+                lineHeight: "1.6",
+                marginBottom: "50px",
+                maxWidth: "500px",
+              }}
+            >
+              Permissionless Web3 platform for transparent, multi-winner, and
+              provably fair raffles on Sui Network.
+            </p>
+
+            <div style={{ display: "flex", gap: "20px", alignItems: "center" }}>
+              {!account ? (
+                <div
+                  style={{ transform: "scale(1.1)", transformOrigin: "left" }}
+                >
+                  <ConnectButton
+                    style={{
+                      background: THEME_COLOR,
+                      color: "black",
+                      fontWeight: "bold",
+                      padding: "15px 30px",
+                      borderRadius: "12px",
+                      border: "none",
+                      cursor: "pointer",
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "10px",
+                  }}
+                >
+                  <button
+                    onClick={() => setHasEntered(true)}
+                    style={{
+                      padding: "18px 40px",
+                      background: `linear-gradient(135deg, ${THEME_COLOR}, #0066ff)`,
+                      border: "none",
+                      borderRadius: "12px",
+                      color: "white",
+                      fontWeight: "bold",
+                      fontSize: "1.1rem",
+                      cursor: "pointer",
+                      boxShadow: `0 10px 30px -5px ${THEME_COLOR}66`,
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    ENTER DASHBOARD →
+                  </button>
+                  <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                    Connected
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* KANAN: Visual 3D Mockup */}
+          <div
+            style={{
+              display: "none",
+              "@media (min-width: 1000px)": { display: "block" },
+              position: "relative",
+            }}
+          >
+            <div
+              style={{
+                background: "rgba(20, 20, 30, 0.7)",
+                backdropFilter: "blur(20px)",
+                border: "1px solid rgba(255, 255, 255, 0.1)",
+                borderRadius: "24px",
+                padding: "30px",
+                transform: "perspective(1000px) rotateY(-10deg) rotateX(5deg)",
+                boxShadow: "50px 50px 100px rgba(0,0,0,0.5)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: "30px",
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
+                    Entry Price
+                  </div>
+                  <div style={{ fontWeight: "bold", fontSize: "1.2rem" }}>
+                    1.0 SUI
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
+                    Status
+                  </div>
+                  <div
+                    style={{
+                      color: THEME_COLOR,
+                      fontWeight: "bold",
+                      background: "rgba(0, 229, 255, 0.1)",
+                      padding: "2px 10px",
+                      borderRadius: "5px",
+                    }}
+                  >
+                    ACTIVE
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  background: "#0a0a10",
+                  borderRadius: "16px",
+                  padding: "20px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "20px",
+                  border: "1px solid rgba(255,255,255,0.05)",
+                }}
+              >
+                <div
+                  style={{
+                    width: "50px",
+                    height: "50px",
+                    background: `linear-gradient(135deg, ${THEME_COLOR}, #0066ff)`,
+                    borderRadius: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "1.5rem",
+                  }}
+                >
+                  🎁
+                </div>
+                <div>
+                  <div style={{ fontWeight: "bold" }}>Grand Prize</div>
+                  <div style={{ fontSize: "0.9rem", color: "#64748b" }}>
+                    Pool Accumulation
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <p style={{marginTop: '30px', color: '#444', fontSize: '0.8rem'}}>POWERED BY SUI MOVE V3</p>
       </div>
     );
   }
 
-  // 2. DASHBOARD
+  // =================================================================
+  // 2. DASHBOARD VIEW
+  // =================================================================
   return (
-    <div style={{background: '#020205', minHeight: '100vh', color: 'white', fontFamily: 'Courier New, monospace', padding: '20px'}}>
-      
+    <div
+      style={{
+        background:
+          "radial-gradient(circle at top right, #1a1c4b 0%, #050508 100%)",
+        minHeight: "100vh",
+        color: "#e2e8f0",
+        fontFamily: '"Inter", sans-serif',
+        paddingBottom: "50px",
+      }}
+    >
       {/* NAVBAR */}
-      <nav style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-        borderBottom: `1px solid ${THEME_COLOR}33`, paddingBottom: '20px', marginBottom: '50px'
-      }}>
-        <div style={{fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px'}}>
-          <div style={{width: '15px', height: '15px', background: THEME_COLOR, borderRadius: '50%', boxShadow: `0 0 10px ${THEME_COLOR}`}}></div>
-          PROTOCOL DASHBOARD
+      <nav
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "20px 40px",
+          background: "rgba(255, 255, 255, 0.03)",
+          backdropFilter: "blur(10px)",
+          borderBottom: "1px solid rgba(255, 255, 255, 0.05)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "1.5rem",
+            fontWeight: 800,
+            background: `linear-gradient(90deg, ${THEME_COLOR}, #7000ff)`,
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+          }}
+        >
+          SUI RAFFLE.
         </div>
-        <ConnectButton />
+        <div style={{ display: "flex", gap: "20px", alignItems: "center" }}>
+          <button
+            onClick={() => setHasEntered(false)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#64748b",
+              cursor: "pointer",
+              fontWeight: "bold",
+            }}
+          >
+            EXIT
+          </button>
+          <ConnectButton />
+        </div>
       </nav>
 
-      <div style={{maxWidth: '1200px', margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '40px'}}>
-        
-        {/* KARTU 1: LAUNCHER */}
-        <div style={{
-          background: '#0a0a12', padding: '40px', borderRadius: '15px', border: `1px solid ${THEME_COLOR}22`,
-          boxShadow: `0 0 30px rgba(0, 0, 0, 0.5)`
-        }}>
-          <h2 style={{marginTop: 0, color: 'white', borderBottom: '1px solid #333', paddingBottom: '15px', marginBottom: '25px'}}>
-            🛠️ LAUNCH NEW POOL
+      <div
+        style={{
+          maxWidth: "1100px",
+          margin: "60px auto",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(450px, 1fr))",
+          gap: "30px",
+          padding: "0 20px",
+        }}
+      >
+        {/* --- CARD 1: CREATOR --- */}
+        <div
+          style={{
+            background: "rgba(20, 20, 30, 0.6)",
+            backdropFilter: "blur(20px)",
+            border: "1px solid rgba(255, 255, 255, 0.08)",
+            borderRadius: "24px",
+            padding: "40px",
+          }}
+        >
+          <h2
+            style={{
+              marginTop: 0,
+              fontSize: "1.2rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+            }}
+          >
+            <span
+              style={{
+                background: "rgba(0,255,100,0.1)",
+                color: "#00ff66",
+                padding: "5px 10px",
+                borderRadius: "8px",
+                fontSize: "0.8rem",
+              }}
+            >
+              CREATOR
+            </span>
+            Launch Pool
           </h2>
-          
-          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px'}}>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "15px",
+              marginTop: "30px",
+            }}
+          >
             <div>
-              <label style={labelStyle}>Ticket Price (SUI)</label>
-              <input type="number" value={priceInput} onChange={e=>setPriceInput(e.target.value)} style={inputStyle}/>
+              <label
+                style={{
+                  display: "block",
+                  marginBottom: "8px",
+                  fontSize: "0.85rem",
+                  color: "#94a3b8",
+                }}
+              >
+                PRICE (SUI)
+              </label>
+              <input
+                type="number"
+                value={priceInput}
+                onChange={(e) => setPriceInput(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  background: "rgba(0,0,0,0.3)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "white",
+                  borderRadius: "12px",
+                  outline: "none",
+                  fontFamily: "monospace",
+                }}
+              />
             </div>
             <div>
-              <label style={labelStyle}>Duration (Hours)</label>
-              <input type="number" value={durationInput} onChange={e=>setDurationInput(e.target.value)} style={inputStyle}/>
+              <label
+                style={{
+                  display: "block",
+                  marginBottom: "8px",
+                  fontSize: "0.85rem",
+                  color: "#94a3b8",
+                }}
+              >
+                DURATION (H)
+              </label>
+              <input
+                type="number"
+                value={durationInput}
+                onChange={(e) => setDurationInput(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  background: "rgba(0,0,0,0.3)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "white",
+                  borderRadius: "12px",
+                  outline: "none",
+                  fontFamily: "monospace",
+                }}
+              />
             </div>
           </div>
 
-          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '10px'}}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "15px",
+              marginTop: "15px",
+            }}
+          >
             <div>
-              <label style={labelStyle}>Total Slots</label>
-              <input type="number" value={slotInput} onChange={e=>setSlotInput(e.target.value)} style={inputStyle}/>
+              <label
+                style={{
+                  display: "block",
+                  marginBottom: "8px",
+                  fontSize: "0.85rem",
+                  color: "#94a3b8",
+                }}
+              >
+                SLOTS
+              </label>
+              <input
+                type="number"
+                value={slotInput}
+                onChange={(e) => setSlotInput(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  background: "rgba(0,0,0,0.3)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "white",
+                  borderRadius: "12px",
+                  outline: "none",
+                  fontFamily: "monospace",
+                }}
+              />
             </div>
             <div>
-              <label style={labelStyle}>🏆 Winners Count</label>
-              <input type="number" value={winnerInput} onChange={e=>setWinnerInput(e.target.value)} style={{...inputStyle, borderColor: THEME_COLOR, background: `rgba(0, 229, 255, 0.1)`}}/>
+              <label
+                style={{
+                  display: "block",
+                  marginBottom: "8px",
+                  fontSize: "0.85rem",
+                  color: "#94a3b8",
+                }}
+              >
+                WINNERS
+              </label>
+              <input
+                type="number"
+                value={winnerInput}
+                onChange={(e) => setWinnerInput(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  background: "rgba(0,0,0,0.3)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "white",
+                  borderRadius: "12px",
+                  outline: "none",
+                  fontFamily: "monospace",
+                }}
+              />
             </div>
           </div>
-            
-          <button onClick={createPool} disabled={loading} style={{
-              width: '100%', padding: '18px', background: THEME_COLOR, border: 'none', 
-              fontWeight: 'bold', cursor: 'pointer', borderRadius: '5px', marginTop: '25px',
-              boxShadow: `0 0 20px ${THEME_COLOR}66`, color: '#000', fontSize: '1rem', letterSpacing: '1px'
-          }}>
-            {loading ? 'PROCESSING...' : '🚀 LAUNCH POOL'}
+
+          <button
+            onClick={createPool}
+            disabled={loading}
+            style={{
+              width: "100%",
+              padding: "16px",
+              marginTop: "25px",
+              background: `linear-gradient(135deg, ${THEME_COLOR} 0%, #0066ff 100%)`,
+              border: "none",
+              borderRadius: "12px",
+              color: "white",
+              fontWeight: "bold",
+              cursor: loading ? "not-allowed" : "pointer",
+            }}
+          >
+            {loading ? "PROCESSING..." : "🚀 LAUNCH POOL"}
           </button>
 
-          {/* --- AREA HASIL TRANSAKSI --- */}
           {successLink && (
-            <div style={{marginTop: '20px', padding: '15px', border: '1px dashed #0aff0a', borderRadius: '10px', background: 'rgba(10,255,10,0.05)'}}>
-               <p style={{margin: '0 0 10px 0', color: '#aaa', fontSize: '0.9rem'}}>✅ Pool Created! Check your ID here:</p>
-               <a href={successLink} target="_blank" rel="noreferrer" style={{
-                 display: 'block', textAlign: 'center', padding: '10px', background: '#0aff0a', 
-                 color: 'black', fontWeight: 'bold', textDecoration: 'none', borderRadius: '5px'
-               }}>
-                 📄 LIHAT TIKET (EXPLORER)
-               </a>
+            <div style={{ marginTop: "20px", textAlign: "center" }}>
+              <a
+                href={successLink}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  color: "#00ff66",
+                  textDecoration: "none",
+                  borderBottom: "1px dashed",
+                }}
+              >
+                View Transaction ↗️
+              </a>
             </div>
           )}
-
         </div>
 
-        {/* KARTU 2: JOINER */}
-        <div style={{
-          background: '#0a0a12', padding: '40px', borderRadius: '15px', border: `1px solid ${THEME_COLOR}22`,
-          boxShadow: `0 0 30px rgba(0, 0, 0, 0.5)`
-        }}>
-          <h2 style={{marginTop: 0, color: THEME_COLOR, borderBottom: '1px solid #333', paddingBottom: '15px', marginBottom: '25px'}}>
-            🎟️ JOIN POOL
+        {/* --- CARD 2: JOINER (AUTO-FILLED) --- */}
+        <div
+          style={{
+            background: "rgba(20, 20, 30, 0.6)",
+            backdropFilter: "blur(20px)",
+            border: "1px solid rgba(255, 255, 255, 0.08)",
+            borderRadius: "24px",
+            padding: "40px",
+          }}
+        >
+          <h2
+            style={{
+              marginTop: 0,
+              fontSize: "1.2rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+            }}
+          >
+            <span
+              style={{
+                background: "rgba(0,240,255,0.1)",
+                color: "#00f0ff",
+                padding: "5px 10px",
+                borderRadius: "8px",
+                fontSize: "0.8rem",
+              }}
+            >
+              PLAYER
+            </span>
+            Join Pool
           </h2>
-          
-          <label style={labelStyle}>TARGET POOL ID</label>
-          <input type="text" value={targetPool} onChange={e=>setTargetPool(e.target.value)} style={{...inputStyle, fontFamily: 'monospace', fontSize: '0.8rem'}}/>
-          
-          <div style={{
-            background: `linear-gradient(45deg, rgba(0, 229, 255, 0.05) 0%, transparent 100%)`, 
-            padding: '25px', borderRadius: '10px', margin: '25px 0', border: `1px dashed ${THEME_COLOR}44`
-          }}>
-            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '15px'}}>
-              <span style={{color:'#888', fontSize: '0.9rem'}}>ENTRY COST</span>
-              <strong style={{color: 'white'}}>1 SUI</strong>
+
+          <div style={{ marginTop: "30px" }}>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                fontSize: "0.85rem",
+                color: "#94a3b8",
+              }}
+            >
+              POOL ID (Auto-filled after create)
+            </label>
+            <input
+              type="text"
+              value={targetPool}
+              onChange={(e) => setTargetPool(e.target.value)}
+              placeholder="0x..."
+              style={{
+                width: "100%",
+                padding: "14px",
+                background: "rgba(0,0,0,0.3)",
+                border: `1px solid ${THEME_COLOR}44`,
+                color: THEME_COLOR,
+                borderRadius: "12px",
+                outline: "none",
+                fontFamily: "monospace",
+              }}
+            />
+          </div>
+
+          <div
+            style={{
+              background: `rgba(0, 229, 255, 0.05)`,
+              padding: "20px",
+              borderRadius: "16px",
+              marginTop: "20px",
+              border: `1px solid ${THEME_COLOR}22`,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: "5px",
+                fontSize: "0.9rem",
+              }}
+            >
+              <span style={{ color: "#94a3b8" }}>Entry Cost</span>{" "}
+              <strong>{priceInput} SUI</strong>
             </div>
-            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '15px'}}>
-              <span style={{color:'#888', fontSize: '0.9rem'}}>SETTLEMENT</span>
-              <strong style={{color: THEME_COLOR}}>AUTO-TRIGGER</strong>
-            </div>
-            <div style={{display: 'flex', justifyContent: 'space-between'}}>
-              <span style={{color:'#888', fontSize: '0.9rem'}}>WINNERS</span>
-              <strong style={{color: THEME_COLOR}}>MULTI-WINNER ENABLED</strong>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: "0.9rem",
+              }}
+            >
+              <span style={{ color: "#94a3b8" }}>Fairness</span>{" "}
+              <strong style={{ color: THEME_COLOR }}>Provably Fair</strong>
             </div>
           </div>
 
-          <button onClick={joinPool} disabled={loading} style={{
-              width: '100%', padding: '18px', background: 'transparent', 
-              border: `2px solid ${THEME_COLOR}`, color: THEME_COLOR, fontWeight: 'bold', 
-              cursor: 'pointer', borderRadius: '5px', transition: '0.3s', fontSize: '1rem', letterSpacing: '1px'
-          }}>
-             {loading ? 'PROCESSING...' : 'BUY TICKET NOW'}
+          <button
+            onClick={joinPool}
+            disabled={loading}
+            style={{
+              width: "100%",
+              padding: "16px",
+              marginTop: "25px",
+              background: "transparent",
+              border: `1px solid ${THEME_COLOR}66`,
+              borderRadius: "12px",
+              color: THEME_COLOR,
+              fontWeight: "bold",
+              cursor: loading ? "not-allowed" : "pointer",
+            }}
+          >
+            {loading ? "WAITING..." : "BUY TICKET NOW"}
           </button>
         </div>
-
       </div>
     </div>
   );
