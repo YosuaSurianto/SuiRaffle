@@ -1,42 +1,94 @@
-/* Minimal styling layer on top of Radix Themes.
-   Keeps the UI "raffl-esque" (glassy + gradients) without adding Tailwind.
-*/
+:root {
+  --app-max: 1100px;
+}
 
-html,
-body,
-#root {
+html, body {
   height: 100%;
 }
 
 body {
   margin: 0;
+  /* bright, modern background */
   background:
-    radial-gradient(1200px 600px at 10% 10%, rgba(146, 99, 255, 0.22), transparent 60%),
-    radial-gradient(900px 500px at 90% 20%, rgba(0, 193, 255, 0.18), transparent 55%),
-    radial-gradient(700px 500px at 50% 100%, rgba(255, 115, 179, 0.12), transparent 55%),
-    #050507;
+    radial-gradient(1200px 800px at 20% 10%, rgba(99, 102, 241, 0.16), transparent 60%),
+    radial-gradient(900px 700px at 90% 20%, rgba(56, 189, 248, 0.18), transparent 55%),
+    radial-gradient(900px 700px at 30% 90%, rgba(34, 197, 94, 0.12), transparent 55%),
+    #f7f8fb;
 }
 
-/* Make Radix Theme container feel a bit wider on desktop */
-.app-container {
-  max-width: 1100px;
+.app-shell {
+  min-height: 100vh;
 }
 
-/* Small helper to ensure card grids have breathing room */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(12px);
+  background: rgba(247, 248, 251, 0.75);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.shell-inner {
+  max-width: var(--app-max);
+  margin: 0 auto;
+  padding: 18px 20px;
+}
+
+.hero {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255,255,255,0.7);
+  box-shadow: 0 12px 30px rgba(15,23,42,0.08);
+}
+
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
-@media (min-width: 760px) {
-  .card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+@media (max-width: 980px) {
+  .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .card-grid { grid-template-columns: 1fr; }
 }
 
-@media (min-width: 1024px) {
-  .card-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+.raffle-card {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255,255,255,0.76);
+  box-shadow: 0 10px 24px rgba(15,23,42,0.08);
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.raffle-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px rgba(15,23,42,0.10);
+}
+
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.progress > div {
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.9);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255,255,255,0.75);
+}
+
+.muted {
+  opacity: 0.75;
 }

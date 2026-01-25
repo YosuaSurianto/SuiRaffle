@@ -4,6 +4,7 @@ import "@mysten/dapp-kit/dist/index.css";
 import "@radix-ui/themes/styles.css";
 import "./styles.css";
 
+import { BrowserRouter } from "react-router-dom";
 import { SuiClientProvider, WalletProvider } from "@mysten/dapp-kit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Theme } from "@radix-ui/themes";
@@ -14,11 +15,19 @@ const queryClient = new QueryClient();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <Theme appearance="dark">
+    <Theme
+      appearance="light"
+      accentColor="indigo"
+      grayColor="slate"
+      radius="large"
+      scaling="105%"
+    >
       <QueryClientProvider client={queryClient}>
         <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
           <WalletProvider autoConnect>
-            <App />
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
           </WalletProvider>
         </SuiClientProvider>
       </QueryClientProvider>
