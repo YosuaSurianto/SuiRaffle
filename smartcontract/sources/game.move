@@ -141,13 +141,13 @@ module sui_raffle::game {
 
         // "Selama jumlah pemenang belum terpenuhi, kocok lagi"
         while (i < pool.num_winners) {
-            // 1. Hitung sisa peserta
+            // Hitung sisa peserta
             let len = pool.participants.length();
             
-            // 2. Pilih nomor acak dari sisa peserta
+            // Pilih nomor acak dari sisa peserta
             let index = random::generate_u64_in_range(&mut generator, 0, len); 
-            
-            // 3. AMBIL & HAPUS (Swap Remove)
+        
+            // AMBIL & HAPUS (Swap Remove)
             // Ini kuncinya: function ini mengambil orang di index tersebut,
             // lalu menghapusnya dari list peserta. Jadi dia gak bisa menang 2x.
             let winner = pool.participants.swap_remove(index);
